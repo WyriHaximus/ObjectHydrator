@@ -326,7 +326,7 @@ CODE;
             }
 
 CODE;
-                } elseif ($definition->typeAccessor) {
+                } elseif ($definition->typeKey) {
                     $typeMatchMapCode = '';
 
                     foreach ($definition->typeMap as $payloadType => $valueType) {
@@ -342,10 +342,10 @@ CODE;
             if (is_array(\$value)) {
                 try {
                     \$this->hydrationStack[] = '$definition->accessorName';
-                    \$valueType = \$value['$definition->typeAccessor'] ?? null;
+                    \$valueType = \$value['$definition->typeKey'] ?? null;
 
                     if (\$valueType === null) {
-                        throw new \LogicException('No type defined under key "$definition->typeAccessor"');
+                        throw new \LogicException('No type defined under key "$definition->typeKey"');
                     }
 
                     \$value = match (\$valueType) {
@@ -384,6 +384,51 @@ CODE;
         }
 
         $methodName = 'hydrate' . str_replace('\\', '', $className);
+
+        if ($classDefinition->canBeConstructed() === false) {
+            if ($classDefinition->typeKey === null) {
+                return <<<CODE
+
+    private function $methodName(array \$payload): \\$className
+    {
+        throw UnableToHydrateObject::classIsNotInstantiable('$className', \$exception, stack: \$this->hydrationStack);
+    }
+
+CODE;
+
+            }
+
+            $typeMatchMapCode = '';
+
+            foreach ($classDefinition->typeMap as $payloadType => $valueType) {
+                $method = 'hydrate' . str_replace('\\', '', $valueType);
+                $typeMatchMapCode .= <<<CODE
+                 '$payloadType' => \$this->$method(\$payload),
+
+CODE;
+            }
+
+            return <<<CODE
+    private function $methodName(array \$payload): \\$className
+    {
+        try {{$body}
+             \$type = \$payload['$classDefinition->typeKey'] ?? null;
+        
+             if (\$type === null) {
+                throw UnableToHydrateObject::dueToMissingFields(\\$className::class, ['$classDefinition->typeKey'], stack: \$this->hydrationStack);
+             }
+             
+             return match(\$type) {
+$typeMatchMapCode                 default => throw new \LogicException("No hydrator defined for \"\$type\"."),
+             };
+        } catch (\\Throwable \$exception) {
+            throw UnableToHydrateObject::dueToError('$className', \$exception, stack: \$this->hydrationStack);
+        }
+    }
+CODE;
+
+        }
+
         $constructionCode = $classDefinition->constructionStyle === 'new' ? "new \\$className(...\$properties)" : "\\$classDefinition->constructor(...\$properties)";
 
         return <<<CODE
